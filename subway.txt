@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALEX X SUBWAY</title>
+    <style>
+        body { 
+            margin: 0; padding: 0; background-color: #111; color: white; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center; 
+            height: 100vh; overflow: hidden;
+        }
+        canvas { 
+            background-color: #2c3e50; box-shadow: 0 0 40px rgba(0, 255, 204, 0.2); 
+            border: 4px solid #34495e; border-radius: 10px;
+        }
+        #ui { 
+            position: absolute; top: 10px; width: 380px;
+            display: flex; justify-content: space-between; pointer-events: none; 
+            background: rgba(0, 0, 0, 0.6); padding: 10px 20px; border-radius: 15px;
+        }
+        h2, h3 { margin: 0; color: #f1c40f; }
+        #powerupText { color: #9b59b6; font-weight: bold; display: none; text-align: center; margin-top: 5px;}
+        p { margin: 5px 0 0 0; font-size: 12px; color: #bdc3c7; text-align: center; width: 100%;}
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div>
+            <h2>Score: <span id="scoreText">0</span></h2>
+            <div id="powerupText">⭐ 2X MULTIPLIER!</div>
+        </div>
+        <div>
+            <h3>High: <span id="highScoreText">0</span></h3>
+        </div>
+    </div>
+    <p style="position: absolute; top: 70px;">ARROWS: Left/Right to Move | UP to Jump | DOWN to Slide</p>
+
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreText = document.getElementById("scoreText");
+        const highScoreText = document.getElementById("highScoreText");
+        const powerupText = document.getElementById("powerupText");
+
+        let score = 0;
+        let highScore = localStorage.getItem("alexSubwayHigh") || 0;
+        highScoreText.innerText = highScore;
+        
+        let gameSpeed = 5;
+        let isGameOver = false;
+        let frameCount = 0;
+        let multiplierTimer = 0;
+
+        const laneWidth = canvas.width / 3;
+        const lanes = [laneWidth / 2, laneWidth * 1.5, laneWidth * 2.5];
+
+        const player = {
+            lane: 1,
+            width: 40,
+            baseHeight: 40,
+            height: 40,
+            y: canvas.height - 80,
+            color: "#00ffcc",
+            isJumping: false,
+            isSliding: false,
+            actionTimer: 0,
+            actionDuration: 40
+        };
+
+        let obstacles = [];
+        let items = [];
+
+        window.addEventListener("keydown", (e) => {
+            if (isGameOver && e.key === "Enter") {
+                resetGame(); return;
+            }
+            if (e.key === "ArrowLeft" || e.key === "a") {
+                if (player.lane > 0) player.lane--;
+            } else if (e.key === "ArrowRight" || e.key === "d") {
+                if (player.lane < 2) player.lane++;
+            } else if ((e.key === "ArrowUp" || e.key === "w") && !player.isJumping && !player.isSliding) {
+                player.isJumping = true;
+                player.actionTimer = player.actionDuration;
+            } else if ((e.key === "ArrowDown" || e.key === "s") && !player.isJumping && !player.isSliding) {
+                player.isSliding = true;
+                player.height = 20; // Player ducks down
+                player.y = canvas.height - 60;
+                player.actionTimer = player.actionDuration;
+            }
+        });
+
+        class Obstacle {
+            constructor() {
+                this.lane = Math.floor(Math.random() * 3);
+                let rand = Math.random();
+                this.x = lanes[this.lane] - 30;
+
+                if (rand < 0.33) {
+                    this.type = 'train'; // Dodge only
+                    this.width = 60; this.height = 120; this.y = -this.height; this.color = "#e74c3c";
+                } else if (rand < 0.66) {
+                    this.type = 'barricade'; // Jump over
+                    this.width = 60; this.height = 30; this.y = -this.height; this.color = "#e67e22";
+                } else {
+                    this.type = 'bridge'; // Slide under
+                    this.width = 60; this.height = 20; this.y = -60; this.color = "#3498db";
+                }
+            }
+            update() { this.y += gameSpeed; }
+            draw() {
+                ctx.fillStyle = this.color;
+                if (this.type === 'bridge') {
+                    // Draw columns for the bridge
+                    ctx.fillRect(this.x, this.y, 10, 60);
+                    ctx.fillRect(this.x + 50, this.y, 10, 60);
+                    ctx.fillRect(this.x, this.y, 60, 20); // Top beam
+                } else {
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                }
+            }
+        }
+
+        class Item {
+            constructor() {
+                this.lane = Math.floor(Math.random() * 3);
+                this.type = Math.random() > 0.8 ? 'star' : 'coin';
+                this.radius = 15;
+                this.x = lanes[this.lane];
+                this.y = -30;
+                this.color = this.type === 'star' ? "#9b59b6" : "#f1c40f";
+            }
+            update() { this.y += gameSpeed; }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                if (this.type === 'star') {
+                    // Simple square to represent star for now
+                    ctx.fillRect(this.x - 10, this.y - 10, 20, 20);
+                } else {
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        function resetGame() {
+            score = 0; gameSpeed = 5; obstacles = []; items = [];
+            isGameOver = false; player.lane = 1; player.isJumping = false; player.isSliding = false;
+            multiplierTimer = 0; powerupText.style.display = "none";
+            scoreText.innerText = score; gameLoop();
+        }
+
+        function checkCollision(rect1, rect2, type) {
+            if (type === 'bridge' && player.isSliding) return false; // Safe!
+            if (type === 'barricade' && player.isJumping) return false; // Safe!
+            
+            return (
+                rect1.x < rect2.x + rect2.width && rect1.x + rect1.width > rect2.x &&
+                rect1.y < rect2.y + rect2.height && rect1.y + rect1.height > rect2.y
+            );
+        }
+
+        function update() {
+            if (isGameOver) return;
+            frameCount++;
+
+            // Timers
+            if (player.isJumping || player.isSliding) {
+                player.actionTimer--;
+                if (player.actionTimer <= 0) {
+                    player.isJumping = false;
+                    player.isSliding = false;
+                    player.height = player.baseHeight;
+                    player.y = canvas.height - 80;
+                }
+            }
+            if (multiplierTimer > 0) {
+                multiplierTimer--;
+                if (multiplierTimer <= 0) powerupText.style.display = "none";
+            }
+
+            // Spawning
+            if (frameCount % Math.max(40, 100 - Math.floor(gameSpeed * 4)) === 0) obstacles.push(new Obstacle());
+            if (frameCount % 45 === 0) items.push(new Item());
+            if (frameCount % 600 === 0) gameSpeed += 0.5;
+
+            // Entities
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.update();
+                let pRect = { x: lanes[player.lane] - player.width/2, y: player.y, width: player.width, height: player.height };
+                
+                // Adjust bridge hit box to be high up
+                let oRect = { x: obs.x, y: obs.type === 'bridge' ? obs.y : obs.y, width: obs.width, height: obs.type === 'bridge' ? 20 : obs.height };
+                
+                if (checkCollision(pRect, oRect, obs.type)) {
+                    isGameOver = true;
+                    if (score > highScore) {
+                        highScore = score;
+                        localStorage.setItem("alexSubwayHigh", highScore);
+                        highScoreText.innerText = highScore;
+                    }
+                }
+                if (obs.y > canvas.height) obstacles.splice(i, 1);
+            }
+
+            for (let i = items.length - 1; i >= 0; i--) {
+                let item = items[i];
+                item.update();
+                let iRect = { x: item.x - 15, y: item.y - 15, width: 30, height: 30 };
+                let pRect = { x: lanes[player.lane] - player.width/2, y: player.y, width: player.width, height: player.height };
+                
+                if (checkCollision(pRect, iRect, 'item')) {
+                    if (item.type === 'coin') {
+                        score += (multiplierTimer > 0 ? 20 : 10);
+                    } else {
+                        multiplierTimer = 300; // 5 seconds at 60fps
+                        powerupText.style.display = "block";
+                    }
+                    scoreText.innerText = score;
+                    items.splice(i, 1);
+                    continue;
+                }
+                if (item.y > canvas.height) items.splice(i, 1);
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Draw Watermark Background
+            ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+            ctx.font = "bold 40px 'Segoe UI'";
+            ctx.textAlign = "center";
+            // Tile the watermark
+            for(let i = 0; i < 5; i++) {
+                ctx.fillText("ALEX X SUBWAY", canvas.width / 2, (i * 150) + (frameCount * gameSpeed * 0.2) % 150);
+            }
+
+            // 2. Track Lines
+            ctx.strokeStyle = "#7f8c8d"; ctx.lineWidth = 4; ctx.setLineDash([30, 30]); 
+            ctx.lineDashOffset = -frameCount * gameSpeed; 
+            ctx.beginPath();
+            ctx.moveTo(laneWidth, 0); ctx.lineTo(laneWidth, canvas.height);
+            ctx.moveTo(laneWidth * 2, 0); ctx.lineTo(laneWidth * 2, canvas.height);
+            ctx.stroke(); ctx.setLineDash([]); 
+
+            // 3. Items and Obstacles
+            items.forEach(i => i.draw());
+            obstacles.forEach(o => o.draw());
+
+            // 4. Player
+            let px = lanes[player.lane] - player.width / 2;
+            let py = player.y;
+            let visualScale = 1;
+
+            if (player.isJumping) {
+                let prog = player.actionTimer / player.actionDuration;
+                py -= Math.sin(prog * Math.PI) * 40;
+                visualScale = 1.2;
+            }
+
+            ctx.fillStyle = player.color;
+            ctx.shadowColor = player.color;
+            ctx.shadowBlur = 15;
+            
+            let cw = player.width * visualScale;
+            let ch = player.height * visualScale;
+            
+            ctx.fillRect(lanes[player.lane] - cw / 2, py - (ch - player.height), cw, ch);
+            ctx.shadowBlur = 0; 
+
+            // 5. Game Over State
+            if (isGameOver) {
+                ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "white"; ctx.font = "bold 40px 'Segoe UI'";
+                ctx.fillText("BUSTED!", canvas.width / 2, canvas.height / 2 - 20);
+                ctx.font = "20px 'Segoe UI'"; ctx.fillStyle = "#bdc3c7";
+                ctx.fillText("Press ENTER to Restart", canvas.width / 2, canvas.height / 2 + 30);
+            }
+        }
+
+        function gameLoop() {
+            update(); draw();
+            if (!isGameOver) requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
